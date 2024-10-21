@@ -27,7 +27,6 @@ type FileMeta struct {
 }
 
 func createFileMeta(fileId string, lastOffset int64, dataFolder string) error {
-    // Ensure the data folder exists, create it if it doesn't
     if err := os.MkdirAll(dataFolder, os.ModePerm); err != nil {
         return fmt.Errorf("failed to create data folder: %v", err)
     }
@@ -35,7 +34,7 @@ func createFileMeta(fileId string, lastOffset int64, dataFolder string) error {
     metaFilePath := filepath.Join(dataFolder, fmt.Sprintf("%s_meta.json", fileId))
     fileMeta := FileMeta{
         LastOffset:  lastOffset,
-        UploadStart: time.Now(),
+	UploadStart: time.Now(),  // TODO: needs to be retained, consider separate timestamp like lastUpload
     }
 
     f, err := os.Create(metaFilePath)
@@ -54,45 +53,32 @@ func createFileMeta(fileId string, lastOffset int64, dataFolder string) error {
     return nil
 }
 
-func readFileMeta(fileId string, dataFolder string) (*FileMeta, error) {
-    metaFilePath := filepath.Join(dataFolder, fmt.Sprintf("%s_meta.json", fileId))
-
-    file, err := os.Open(metaFilePath)
-    if err != nil {
-        return nil, fmt.Errorf("failed to open meta file: %v", err)
-    }
-    defer file.Close()
-
-    var fileMeta FileMeta
-
-    decoder := json.NewDecoder(file)
-    if err := decoder.Decode(&fileMeta); err != nil {
-        return nil, fmt.Errorf("failed to decode meta file: %v", err)
-    }
-
-    return &fileMeta, nil
-}
 
 func (s *FileServiceServer) Upload(stream pb.FileService_UploadServer) error {
 
-    var local_offset int64 = 0
+    var offset int64 = 0
     var dataFolder string = "./meta_data"
+    //var fileId string = "None"
 
     fmt.Printf("Client connected ..\n ")
     for {
         chunk, err := stream.Recv()
-	//fmt.Println(" 1- the chunk offset set was: %d", s.uploads[chunk.FileId])
-	fmt.Println(" 1- the chunk offset set was: %d", local_offset)
+
+	//if fileId == "None" {
+	//    fileId = chunk.FileId
+	//}
 
 	if err == io.EOF {
 	    // TODO: In case remaining data was sent here (verify), it also needs to be written out before returning.	
-	    fmt.Println("Got EOF from io")
+	    //fmt.Println("Got EOF from io")
+	    //err = createFileMeta(fileId, offset, dataFolder)
+    	    //if err != nil {
+            //	fmt.Printf("Error: %v\n", err)
+    	    //}
             return stream.SendAndClose(&pb.UploadStatus{
                 Success: true,
                 Message: "File uploaded successfully.",
-		//LastOffset: s.uploads[chunk.FileId], // non-valid memory when this code is reached
-                //LastOffset: chunk.Offset,  // not in payload, when err is io.EOF
-		LastOffset: local_offset,
+		LastOffset: offset,
             })
         }
 
@@ -100,49 +86,54 @@ func (s *FileServiceServer) Upload(stream pb.FileService_UploadServer) error {
             return err
         }
 
-    	err = createFileMeta(chunk.FileId, chunk.Offset, dataFolder)
-    	if err != nil {
-        	fmt.Printf("Error: %v\n", err)
-    	}
-
-	//s.mu.Lock()
-        //if chunk.Offset != s.uploads[chunk.FileId] {
-        //    s.mu.Unlock()
-        //    return fmt.Errorf("invalid offset, expected: %d, got: %d", s.uploads[chunk.FileId], chunk.Offset)
-        //}
-
-	if chunk.Offset != local_offset {
-		return fmt.Errorf("invalid offset, expected: %d, got: %d", local_offset, chunk.Offset)
+    	
+	if chunk.Offset != offset {
+		return fmt.Errorf("invalid offset, expected: %d, got: %d", offset, chunk.Offset)
 	}
 
         fmt.Printf("Received chunk for file: %s at offset: %d\n", chunk.FileId, chunk.Offset)
 	// TODO: 
 	//   - Append chunk to file,
-	//   - write chunkOffset to meta data (to disk)
 	//   - for resume, read chunk.FileId and chunk.Offset from disk
-        //s.uploads[chunk.FileId] = chunk.Offset + int64(len(chunk.Data))  // Update the offset
-        local_offset = chunk.Offset + int64(len(chunk.Data))  
-	fmt.Println(" 2- the chunk offset set was: %d", local_offset)
-        //s.mu.Unlock()
+        
+	offset = chunk.Offset + int64(len(chunk.Data))  
+	err = createFileMeta(chunk.FileId, offset, dataFolder)
+    	if err != nil {
+        	fmt.Printf("Error: %v\n", err)
+    	}
+
     }
 }
 
+func readFileMeta(fileId string, dataFolder string) (*FileMeta, bool) {
+    metaFilePath := filepath.Join(dataFolder, fmt.Sprintf("%s_meta.json", fileId))
+
+    file, err := os.Open(metaFilePath)
+    if err != nil {
+        return nil, false //fmt.Errorf("failed to open meta file: %v", err)
+    }
+    defer file.Close()
+
+    var fileMeta FileMeta
+
+    decoder := json.NewDecoder(file)
+    if err := decoder.Decode(&fileMeta); err != nil {
+        return nil, false //fmt.Errorf("failed to decode meta file: %v", err)
+    }
+
+    return &fileMeta, true
+}
 
 func (s *FileServiceServer) ResumeUpload(ctx context.Context, req *pb.ResumeRequest) (*pb.ResumeStatus, error) {
     
-    lastOffset, err := readFileMeta(req.FileId, "./meta_data")
-    var exists = true
-    if err != nil {
-    	exists = false
-        fmt.Printf("Error reading meta file: %v\n", err)
-        return
-    }
-    
+    fileMeta, exists := readFileMeta(req.FileId, "./meta_data")
     if !exists {
+        fmt.Printf("readFileMeta() returned non-existent meta file for file ID: %s\n", req.FileId)
         return &pb.ResumeStatus{LastOffset: 0}, nil 
     }
 
-    return &pb.ResumeStatus{LastOffset: lastOffset}, nil
+    fmt.Printf("lastOffset info read for file ID %s with offset: %d\n", req.FileId, fileMeta.LastOffset)
+    return &pb.ResumeStatus{LastOffset: fileMeta.LastOffset}, nil
 }
 
 func main() {
