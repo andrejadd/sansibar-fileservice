@@ -5,13 +5,48 @@ import (
     "io"
     "log"
     "os"
+    "fmt"
     "time"
-
-    pb "path/to/protos/filetransfer"
+    "crypto/sha256"
+    //"github.com/google/uuid"
+    pb "github.com/andrejadd/sansibar-fileservice/fileservice"
     "google.golang.org/grpc"
 )
 
+func generateFileID(filePath string) (string, error) {
+    file, err := os.Open(filePath)
+    if err != nil {
+        return "", fmt.Errorf("failed to open file: %v", err)
+    }
+    defer file.Close()
+
+    hash := sha256.New()
+
+    if _, err := io.Copy(hash, file); err != nil {
+        return "", fmt.Errorf("failed to hash file: %v", err)
+    }
+
+    fileHash := fmt.Sprintf("%x", hash.Sum(nil))
+
+    return fileHash, nil
+}
+
 func main() {
+
+    if len(os.Args) < 2 {
+        fmt.Println("Usage: go run client.go <filename>")
+        return
+    }
+
+    filePath := os.Args[1]
+    fileId, err := generateFileID(filePath)
+    if err != nil {
+        fmt.Printf("Error generating file ID: %v\n", err)
+        return
+    }
+    fmt.Printf("Generated File ID (SHA-256): %s\n", fileId)
+
+    
     conn, err := grpc.Dial("localhost:50051", grpc.WithInsecure())
     if err != nil {
         log.Fatalf("Did not connect: %v", err)
@@ -19,14 +54,9 @@ func main() {
     defer conn.Close()
 
     client := pb.NewFileServiceClient(conn)
-    
-    fileId := "video1"
-    filePath := "path/to/video.mp4"
-    
-    // Try to resume upload if previously interrupted
     resumeOffset := resumeUpload(client, fileId)
-    
-    // Open the file and seek to the correct position
+    fmt.Println("resumeOffset is %d", resumeOffset)
+
     file, err := os.Open(filePath)
     if err != nil {
         log.Fatalf("Could not open file: %v", err)
@@ -40,7 +70,6 @@ func main() {
         }
     }
 
-    // Start streaming chunks
     stream, err := client.Upload(context.Background())
     if err != nil {
         log.Fatalf("Could not initiate upload: %v", err)
@@ -53,6 +82,8 @@ func main() {
     for {
         n, err := file.Read(buffer)
         if err == io.EOF {
+	    // TODO: if there is actually data left, need to send it before leaving this loop.
+	    fmt.Println("EOF reached when reading from file")
             break
         }
         if err != nil {
@@ -71,8 +102,10 @@ func main() {
         }
 
         offset += int64(n)
+	fmt.Println("uploaded chunk offset %d", offset)
     }
-
+    fmt.Println("finished upload for loop!")
+    
     status, err := stream.CloseAndRecv()
     if err != nil {
         log.Fatalf("Error receiving response: %v", err)
