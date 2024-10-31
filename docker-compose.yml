@@ -6,12 +6,14 @@ services:
     container_name: fileupload
     volumes:
       - ./fileupload:/app  # Mount current directory to /app for live code editing
+      - ./incoming_data:/incoming  
     ports:
       - "50051:50051"
     networks:
       - sansibarnet
 
   minio:
+    container_name: minio
     image: minio/minio:latest # Use the latest MinIO image
     ports:
       - "9000:9000" # MinIO web interface

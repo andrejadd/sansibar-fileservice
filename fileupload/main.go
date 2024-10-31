@@ -8,7 +8,6 @@ import (
     "os"
     "sync"
     pb "github.com/andrejadd/sansibar-fileservice/fileupload/fileservice"
-    "github.com/andrejadd/sansibar-fileservice/fileupload/object_storage"
     "google.golang.org/grpc"
     "log"
     "net"
@@ -17,7 +16,13 @@ import (
     //"github.com/google/uuid"
 )
 
-var dataFolder string = "./incoming"
+// FileInfo holds information about the data and meta files
+type FileInfo struct {
+    DataFilePath string
+    MetaFilePath string
+}
+var dataFolder string = "/incoming"
+var uploadQueue = make(chan FileInfo, 100) // Buffered channel with a capacity of 10
 
 type FileServiceServer struct {
     pb.UnimplementedFileServiceServer
@@ -97,6 +102,22 @@ func updateOffset(file_hash string, newOffset int64) error {
     return nil
 }
 
+func new_data_arrived() {
+    for fileInfo := range uploadQueue {
+	fmt.Printf("Uploading data file to Minio: %s\n", fileInfo.DataFilePath)
+	result := PutFile(fileInfo.DataFilePath)
+	os.Remove(fileInfo.DataFilePath)
+	if !result {
+       	   fmt.Printf("Failed to upload data file %s to object storage --- needs handling \n", fileInfo.DataFilePath)
+    	}
+
+    	fmt.Printf("Uploading meta file to Minio: %s\n", fileInfo.MetaFilePath)
+ 	result = PutFile(fileInfo.MetaFilePath)
+        if !result {
+       	   fmt.Printf("Failed to upload meta file %s to object storage --- needs handling \n", fileInfo.MetaFilePath)
+        }
+    }
+}
 
 func (s *FileServiceServer) Upload(stream pb.FileService_UploadServer) error {
 
@@ -105,10 +126,18 @@ func (s *FileServiceServer) Upload(stream pb.FileService_UploadServer) error {
     var file_ext string = "unknown"
     var file_name string = "unknown"
     var file_out_fd *os.File
+    var file_hash string = "unknown"
 
     for {
         chunk, err := stream.Recv()
 	if err == io.EOF {
+	    fmt.Printf("[Upload()] Adding upload job to queue ..\n")
+	    ready_for_storage := FileInfo{
+    		DataFilePath: file_name,
+    		MetaFilePath: filepath.Join(dataFolder, fmt.Sprintf("%s_meta.json", file_hash)),
+	    }
+	    uploadQueue <- ready_for_storage
+
             return stream.SendAndClose(&pb.UploadStatus{
                 Success: true,
                 Message: "File uploaded successfully.",
@@ -129,6 +158,7 @@ func (s *FileServiceServer) Upload(stream pb.FileService_UploadServer) error {
 	    offset = file_meta.LastOffset 
 	    file_ext = file_meta.FileExt
 	    file_name = file_meta.FileName
+	    file_hash = chunk.FileId
 	    fmt.Printf("Initialized params for file %s - offset: %d, file_ext: %s\n", file_name, offset, file_ext)
 
     	    fmt.Printf("Creating data file %s\n", file_name)
@@ -200,8 +230,6 @@ func get_offset(file_hash string)(int64) {
 
 func (s *FileServiceServer) InitiateUpload(ctx context.Context, req *pb.ResumeRequest) (*pb.ResumeStatus, error) {
 
-    fmt.Printf("Start of object storage test code ---------------------------------------\n")
-    
     last_offset := get_offset(req.FileId)
     if last_offset == 0 {
 	fmt.Printf("creating new meta file for file %s\n", req.FileId)
@@ -212,6 +240,9 @@ func (s *FileServiceServer) InitiateUpload(ctx context.Context, req *pb.ResumeRe
 }
 
 func main() {
+
+    go new_data_arrived()
+
     if _, err := os.Stat(dataFolder); os.IsNotExist(err) {
         err := os.MkdirAll(dataFolder, 0755) // 0755 is the permission mode
         if err != nil {
