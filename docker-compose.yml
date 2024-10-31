@@ -1,0 +1,52 @@
+services:
+  fileupload:
+    build:
+      context: ./fileupload
+      dockerfile: Dockerfile
+    container_name: fileupload
+    volumes:
+      - ./fileupload:/app  # Mount current directory to /app for live code editing
+    ports:
+      - "50051:50051"
+    networks:
+      - sansibarnet
+
+  minio:
+    image: minio/minio:latest # Use the latest MinIO image
+    ports:
+      - "9000:9000" # MinIO web interface
+      - "9001:9001" # MinIO Console
+    environment:
+      MINIO_ROOT_USER: "andrej"
+      MINIO_ROOT_PASSWORD: "98989898" 
+      MINIO_ACCESS_KEY: "minio_access_key"
+      MINIO_SECRET_KEY: "minio_secret_key"
+      MINIO_STORAGE_USE_HTTPS: "false"
+    command: server /data --console-address :9001
+    networks:
+      - sansibarnet
+    volumes:
+      - ./minio_data:/data # Persistent storage for MinIO data
+
+  nats:
+    image: nats:latest
+    container_name: nats-server
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    command: ["-js"]
+    environment:
+      - NATS_SERVER_NAME=nats-jetstream
+      - NATS_CLUSTER_ADVERTISE=0.0.0.0
+      - NATS_JETSTREAM_MAX_MEMORY=2GB
+      - NATS_JETSTREAM_MAX_FILE=10GB
+    networks:
+      - sansibarnet
+    volumes:
+      - ./nats_data:/data
+
+
+networks:
+  sansibarnet:
+    driver: bridge
+

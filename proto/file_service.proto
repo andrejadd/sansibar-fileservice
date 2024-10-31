@@ -4,11 +4,8 @@ package fileservice;
 option go_package = "github.com/andrej/sansibar-fileservice/fileservice";  // Use your module path here
 
 service FileService {
-    // Upload method with a bi-directional stream for chunked upload
     rpc Upload(stream Chunk) returns (UploadStatus);
-
-    // Resumable upload initiation
-    rpc ResumeUpload(ResumeRequest) returns (ResumeStatus);
+    rpc InitiateUpload(ResumeRequest) returns (ResumeStatus);
 }
 
 message Chunk {
@@ -25,6 +22,7 @@ message UploadStatus {
 
 message ResumeRequest {
     string file_id = 1;    // File ID to resume upload
+    string file_ext = 2;   // The file extension
 }
 
 message ResumeStatus {
